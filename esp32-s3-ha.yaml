@@ -161,6 +161,45 @@ sensor:
 #   scan: true
 
 # ============================================================
+# PN532 NFC 模块(刷卡 / 手机NFC 解锁)
+# ------------------------------------------------------------
+# 接线(Adafruit 款 PN532 breakout, I2C 模式):
+#   拨码开关: 开关1 ON, 开关2 OFF → I2C 模式
+#   VCC → 5V(板载 LDO 降压; PN532 射频功耗较大, 勿用 3.3V 硬拖)
+#   GND → GND, SDA → GPIO6, SCL → GPIO7 (IRQ 可不接)
+# ⚠️ 引脚说明: 摄像头功能已禁用, 故借用其 VSYNC(GPIO6)/HREF(GPIO7) 引脚。
+#    若日后重新启用摄像头, 需把 NFC 换到别的空闲引脚(但 ESP32-S3 上
+#    GPIO22~25 不可用、GPIO26~37 被 SPI/PSRAM 占用, 可选项很少)。
+# 功能: 刷卡 → on_tag 拿到 UID →
+#   ① homeassistant.tag_scanned 发给 HA Tags(在 HA「设置→标签」里
+#      增删卡/做自动化, 免重新编译固件)
+#   ② 推送到模板文本传感器 rfid_tag 便于调试
+# 说明: 使用独立 I2C 总线(nfc_i2c), 与其它外设隔离避免干扰;
+#       默认器件地址 0x24, 无需额外配置
+# ============================================================
+i2c:
+  - id: nfc_i2c
+    sda: GPIO6
+    scl: GPIO7
+    scan: true
+
+pn532_i2c:
+  id: pn532_board
+  i2c_id: nfc_i2c
+  update_interval: 1s
+  on_tag:
+    then:
+      - homeassistant.tag_scanned: !lambda 'return x;'
+      - text_sensor.template.publish:
+          id: rfid_tag
+          state: !lambda 'return x;'
+  on_tag_removed:
+    then:
+      - text_sensor.template.publish:
+          id: rfid_tag
+          state: ""
+
+# ============================================================
 # 摄像头: OV7670 (DVP 并口摄像头)
 # ------------------------------------------------------------
 # 特性说明:
@@ -342,6 +381,12 @@ text_sensor:
   - platform: version
     name: "Firmware Version"
     id: fw_version
+
+  # ---- PN532 NFC 模块: 最近一次刷卡 UID(调试用, 如 74-10-37-94) ----
+  - platform: template
+    name: "NFC Tag ID"
+    id: rfid_tag
+    icon: mdi:nfc-variant
 
 # ============================================================
 # 状态指示灯(可选): 用板载 LED 指示设备状态
