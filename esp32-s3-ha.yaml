@@ -1,0 +1,378 @@
+# ============================================================
+# ESP32-S3 接入 Home Assistant —— ESPHome 主配置文件
+# 参考文档: https://esphome.io
+# 使用方法: 先把 secrets.yaml 重命名并填入真实值, 然后执行
+#           esphome run esp32-s3-ha.yaml
+# ============================================================
+
+esphome:
+  name: esp32-s3-ha               # 设备名称(小写/下划线, 会作为 HA 中的实体前缀)
+  friendly_name: "ESP32 S3 HA"    # 在 HA 中显示的名称
+  compile_process_limit: 1
+ 
+# ============================================================
+# External Components: ZW101 指纹识别模块
+# ============================================================
+external_components:
+  - source:
+      type: local
+      path: components            # 相对于 YAML 文件的路径
+
+esp32:
+  board: esp32-s3-devkitc-1       # 常见 S3 开发板; 若不同请按你的板子修改
+  variant: esp32s3
+  framework:
+    type: arduino                 # 或 type: esp-idf
+  # 重要: 强制使用 PlatformIO 工具链。
+  # ESPHome 2026.x 默认用 ESP-IDF 原生工具链, 会调用系统 idf.py;
+  # 本机 D:\Program\ESP\v5.5 的 ESP-IDF 安装不完整(缺 python_env/工具链),
+  # 导致编译报 "No module named 'esp_idf_monitor'" 而失败。
+  # 改为 platformio 后走经典构建流程, 自动下载 arduino-esp32 工具链, 无需 ESP-IDF。
+  toolchain: platformio
+
+# ============================================================
+# PSRAM 外部内存 —— 摄像头必需!
+# OV7670 每帧(RGB565)数据量很大(如 VGA 约 600KB), 放不进芯片内部 SRAM,
+# 帧缓冲必须放在 PSRAM。请确认你的 ESP32-S3 模块/开发板带 PSRAM
+# (如 ESP32-S3-WROOM-1-N8R8 / N16R8, 8MB Octal PSRAM)。
+#   - 8MB Octal PSRAM(常见) → mode: octal
+#   - Quad PSRAM(少见)      → mode: quad
+# 板子没有 PSRAM 的话摄像头无法工作。
+# ============================================================
+psram:
+  mode: octal
+  speed: 80MHz
+  # ignore_not_found: true   # 默认 true: 找不到 PSRAM 也能启动(此时摄像头会失败)
+
+# # ============================================================
+# # UART: ZW101 指纹识别模块通信
+# # ============================================================
+# uart:
+#   - id: zw101_uart
+#     tx_pin: GPIO20              # ZW101 TX 引脚 (UART1)
+#     rx_pin: GPIO19              # ZW101 RX 引脚 (UART1)
+#     baud_rate: 57600           # ZW101 标准波特率
+
+# # ============================================================
+# # ZW101 指纹识别模块组件
+# # ============================================================
+# zw101:
+#   id: zw101_reader
+#   uart_id: zw101_uart
+
+# 日志输出到串口/API
+# ⚠️ 诊断 ZW101 时临时用 DEBUG; 修好后改回 INFO
+logger:
+  level: DEBUG
+  # 若需单独设置某组件日志级别(如 zw101), 取消下面注释并保留 logs: 非空:
+  # logs:
+  #   zw101: DEBUG
+
+# Home Assistant 原生 API 集成(设备会自动被 HA 发现)
+api:
+  encryption:
+    key: !secret api_key          # 与 HA 的 ESPHome 集成中配置的密钥一致
+
+# 无线 OTA 升级(不用插线也能更新固件)
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# 需要开启 WiFi 的 AP 备用模式(首次配置或断网时可通过热点进入)
+captive_portal:
+
+# ---------------- 网络 ----------------
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # 可选: 手动指定静态 IP, 便于在路由器上固定地址
+  # manual_ip:
+  #   static_ip: 192.168.100.50
+  #   gateway: 192.168.100.1
+  #   subnet: 255.255.255.0
+
+  # 失败时开启热点, 名称为 "esp32-s3-ha"
+  ap:
+    ssid: "ESP32-S3-HA-Fallback"
+    password: !secret ap_password
+
+# ============================================================
+# 传感器: 温度 / 湿度
+# 下面默认使用 DHT22 单总线传感器, 请按你的接线修改引脚
+# 常见 I2C 备选(注释掉上面的 DHT 块, 改用下面任一即可):
+#   - AHT20 / BME280 / SHT30 / SHT4x / AM2320
+# ============================================================
+sensor:
+  - platform: dht
+    pin: GPIO4                  # 数据脚(请按实际接线修改)
+    model: DHT11                # choose from DHT11/DHT22
+    temperature:
+      # 注意: ESPHome 对实体名做 ASCII 化唯一性校验,
+      # 中文名(如"客厅温度")会转成下划线导致冲突, 因此实体名用英文,
+      # 中文显示名可在 HA 中重命名实体实现(见 README 第 5.2 节)
+      name: "Living Room Temperature"
+      id: living_temperature
+      unit_of_measurement: "°C"
+      accuracy_decimals: 1
+    humidity:
+      name: "Living Room Humidity"
+      id: living_humidity
+      accuracy_decimals: 1
+    update_interval: 5s
+
+  # ---- 烟雾传感器: ADC 模拟电压输入 (如 MQ-2 / MQ-7 / MQ-135) ----
+  # 接线: 模块 VCC→5V(或3.3V), GND→GND, AO(模拟输出)→GPIO1
+  # ⚠️ 很多 MQ 模块需要 5V 供电且 AO 输出 0~5V, 直接接到 3.3V ADC 会损坏引脚!
+  #    必须用电阻分压(如 10kΩ+10kΩ)把 AO 压到 3.3V 以下再接 GPIO1。
+  #    若你的模块说明书标明 AO 为 0~3.3V 输出, 则可直连。
+  # ⚠️ ESP32-S3 的 ADC2(GPIO11~20) 与 WiFi 共用会互相干扰,
+  #    请务必使用 ADC1 引脚(GPIO1~GPIO10)。
+  - platform: adc
+    pin: GPIO1                  # AO 模拟输出脚(请按实际接线修改)
+    name: "Smoke Sensor Voltage"
+    id: smoke_voltage
+    update_interval: 5s
+    attenuation: 12db          # 12dB 衰减(约11dB), 支持满量程 0~3.3V 测量
+    filters:
+      - sliding_window_moving_average:   # 滑动平均滤波, 平滑抖动
+          window_size: 10
+          send_every: 10
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+
+  # ---- (可选) 把电压粗略换算成 0~100% 的"烟雾等级", 便于 HA 展示 ----
+  # 注意: MQ 系列传感器输出与浓度的关系非线性, 此换算只是粗略指示,
+  #       如需真实浓度 ppm, 请按传感器手册的灵敏度曲线自行标定。
+  - platform: template
+    name: "Smoke Level"
+    id: smoke_level
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: |-
+      // 0~3.3V 线性映射到 0~100%; 若接了分压请自行换算回实际电压
+      return id(smoke_voltage).state / 3.3 * 100.0;
+
+  # ---- 备选: I2C AHT20 (若你用的是 I2C 温湿度传感器) ----
+  # 注意: 同样用英文名, 中文显示在 HA 中重命名即可
+  # - platform: aht10
+  #   variant: AHT20
+  #   temperature:
+  #     name: "Living Room Temperature"
+  #   humidity:
+  #     name: "Living Room Humidity"
+  #   update_interval: 60s
+  # ---- 备选: I2C BME280 (温湿度+气压) ----
+  # - platform: bme280_i2c
+  #   address: 0x76
+  #   temperature:
+  #     name: "Living Room Temperature"
+  #   pressure:
+  #     name: "Living Room Pressure"
+  #   humidity:
+  #     name: "Living Room Humidity"
+  #   update_interval: 60s
+
+  # # ---- ZW101 指纹识别模块: 匹配得分和 ID ----
+  # - platform: zw101
+  #   zw101_id: zw101_reader
+  #   match_score:
+  #     name: "Fingerprint Match Score"
+  #     id: zw101_match_score
+  #   match_id:
+  #     name: "Fingerprint Match ID"
+  #     id: zw101_match_id
+
+# I2C 总线(使用 I2C 传感器时取消注释, 并按接线修改引脚)
+# i2c:
+#   sda: GPIO8
+#   scl: GPIO9
+#   scan: true
+
+# ============================================================
+# 摄像头: OV7670 (DVP 并口摄像头)
+# ------------------------------------------------------------
+# 特性说明:
+#   * OV7670 没有硬件 JPEG 编码器, 需输出 RGB565 再由 ESP32 软件转 JPEG
+#     (对应下面 pixel_format: RGB565 + jpeg_quality: 10), 帧率会偏低。
+#   * 最高原生分辨率 VGA(640x480); 默认 QVGA(320x240) 更流畅。
+#   * 必须启用上方 psram, 且板子带 PSRAM, 否则内存不足。
+# 接线详见 README「摄像头接线」表, 引脚可按你的实际接线修改。
+# ============================================================
+
+# OV7670 的 SCCB 控制总线(模块上的 SIOD/SIOC), 用 ESPHome 的 i2c 总线承载
+# ⚠️ 注意: 若下方摄像头引脚与你其他模块冲突, 请自行改 GPIO。
+#   尤其 GPIO2 / GPIO15 在「开关」示例里被占(目前是注释状态), 若以后启用继电器
+#   需要把摄像头 PWDN/XCLK 换到别的空闲引脚; GPIO5 在「按钮」示例里被占(同理)。
+# i2c:
+#   - id: camera_i2c
+#     sda: GPIO21
+#     scl: GPIO14
+#     scan: true
+
+# esp32_camera:
+#   name: "Room Camera"           # 中文显示名在 HA 中重命名即可
+#   id: room_camera
+
+#   # DVP 8 位并行数据线, 顺序 D0~D7(对应传感器 Y2~Y9)
+#   data_pins: [GPIO11, GPIO12, GPIO9, GPIO8, GPIO10, GPIO16, GPIO17, GPIO18]
+#   vsync_pin: GPIO6
+#   href_pin: GPIO7
+#   pixel_clock_pin: GPIO13
+#   external_clock:
+#     pin: GPIO15
+#     frequency: 20MHz
+
+#   i2c_id: camera_i2c            # 使用上面定义的摄像头 i2c 总线
+#   reset_pin: GPIO5              # 若你的模块没引出 RESET, 删掉这两行
+#   power_down_pin: GPIO2         # 若你的模块没引出 PWDN, 删掉这两行
+
+#   # OV7670 没有硬件 JPEG → 用 RGB565 + 软件转换(必须同时设 jpeg_quality)
+#   pixel_format: RGB565
+#   jpeg_quality: 10
+#   resolution: QVGA              # 320x240; 想要更清晰可改 VGA(640x480) 但更卡
+#   frame_buffer_location: PSRAM
+
+#   # 帧率: max 为有人观看时的帧率, idle 为无人观看时的帧率
+#   max_framerate: 10 fps
+#   idle_framerate: 0.1 fps
+
+#   # 画面方向(按需调整)
+#   # horizontal_mirror: true
+#   # vertical_flip: false
+
+# # 摄像头 HTTP 视频流(浏览器直接看, 无需 HA)
+# #   http://<设备IP>:8080/           MJPEG 视频流
+# #   http://<设备IP>:8080/snapshot   单张快照
+# esp32_camera_web_server:
+#   - port: 8080
+#     mode: stream
+
+# ============================================================
+# 开关: 继电器 / 灯
+# 请按你的实际接线修改 GPIO 引脚
+# ============================================================
+switch:
+  # - platform: gpio
+  #   pin: GPIO2                  # 继电器/灯控制脚
+  #   name: "Living Room Light"   # 中文显示名可在 HA 中重命名
+  #   id: living_light
+  #   restore_mode: RESTORE_DEFAULT_OFF   # 上电默认恢复为关
+
+  # - platform: gpio
+  #   pin: GPIO15                 # 第二个继电器示例
+  #   name: "Outlet Switch"       # 中文显示名可在 HA 中重命名
+  #   id: outlet_switch
+
+  # ---- ZW101 指纹识别模块: 注册和清除控制 ----
+  # - platform: zw101
+  #   zw101_id: zw101_reader
+  #   enroll:
+  #     name: "Enroll New Fingerprint"
+  #     id: zw101_enroll
+  #     icon: mdi:fingerprint-plus
+  #   clear:
+      # name: "Clear Fingerprint Library"
+      # id: zw101_clear
+      # icon: mdi:delete-forever
+
+# ============================================================
+# 智能门锁: 单刀三掷(SP3T)开关模拟三种状态 + 三色 LED 指示
+# ------------------------------------------------------------
+# 用 SP3T 开关模拟门锁, 无需真实锁体即可在 HA 中测试门锁卡片/自动化:
+#   位置1 → 锁定      (lock 实体 = locked)
+#   位置2 → 解锁成功  (lock 实体 = unlocked)
+#   位置3 → 解锁失败  (lock 实体 = jammed / 卡住)
+# 接线: 开关公共端 COM 接 3.3V, 三个输出端分别接 GPIO38/39/40
+#       (引脚启用内部下拉, 拨到哪一路哪一路读到高电平)
+# LED 指示: 三个输出引脚各接一个 LED(高电平点亮), 指示当前状态:
+#   GPIO41 → 锁定 / GPIO42 → 解锁成功 / GPIO47 → 解锁失败
+#   接线: GPIO → 220Ω 限流电阻 → LED 阳极, LED 阴极 → GND
+# ⚠️ 不要用 GPIO35/36/37: 它们被 Octal PSRAM 接口占用(摄像头 PSRAM 必需),
+#    用它们会报 "GPIOxx is used by the PSRAM interface in octal mode" 警告
+# 说明: HA 前端操作(lock/unlock)不会改变物理开关, 状态始终反映开关位置
+# ============================================================
+lock:
+  - platform: sp3t_lock
+    id: door_lock
+    name: "Front Door Lock"      # 中文显示名可在 HA 中重命名
+    icon: mdi:door
+    locked_pin:
+      number: GPIO38
+      mode:
+        input: true
+        pulldown: true
+    unlocked_pin:
+      number: GPIO39
+      mode:
+        input: true
+        pulldown: true
+    failed_pin:
+      number: GPIO40
+      mode:
+        input: true
+        pulldown: true
+    # 三色状态指示灯(高电平点亮)
+    led_locked_pin: GPIO41       # 锁定
+    led_unlocked_pin: GPIO42     # 解锁成功
+    led_failed_pin: GPIO47       # 解锁失败
+    status:
+      name: "Front Door Lock Status"
+      id: door_lock_status
+
+# ============================================================
+# 二进制传感器示例: 接一个按钮/门磁(按下时触发 HA 自动化)
+# ============================================================
+binary_sensor:
+  # - platform: gpio
+  #   pin:
+  #     number: GPIO5
+  #     mode:
+  #       input: true
+  #       pullup: true
+  #   name: "Front Door Button"    # 中文显示名可在 HA 中重命名
+  #   id: door_button
+  #   filters:
+  #     - delayed_on: 50ms       # 防抖
+  #     - delayed_off: 50ms
+
+  # # ---- ZW101 指纹识别模块: 匹配状态 ----
+  # - platform: zw101
+  #   zw101_id: zw101_reader
+  #   name: "Fingerprint Matched"
+  #   id: zw101_fingerprint_match
+  #   device_class: lock
+
+# ============================================================
+# 文本传感器: 显示设备运行信息(可选)
+# ============================================================
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      id: ip_address
+    ssid:
+      name: "Connected WiFi"
+      id: wifi_ssid
+    mac_address:
+      name: "MAC Address"
+      id: mac_address
+  - platform: version
+    name: "Firmware Version"
+    id: fw_version
+
+  # # ---- ZW101 指纹识别模块: 状态信息 ----
+  # - platform: zw101
+  #   zw101_id: zw101_reader
+  #   status:
+  #     name: "Fingerprint Reader Status"
+  #     id: zw101_status
+
+# ============================================================
+# 状态指示灯(可选): 用板载 LED 指示设备状态
+# ============================================================
+status_led:
+  pin:
+    number: GPIO48              # ESP32-S3-DevKitC-1 板载 RGB LED
+    inverted: true
