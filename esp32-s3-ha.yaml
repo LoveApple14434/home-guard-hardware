@@ -278,37 +278,41 @@ switch:
       # icon: mdi:delete-forever
 
 # ============================================================
-# 智能门锁: 单刀三掷(SP3T)开关模拟三种状态 + 三色 LED 指示
+# 智能门锁: 三个独立按钮模拟三种状态 + 三色 LED 指示
 # ------------------------------------------------------------
-# 用 SP3T 开关模拟门锁, 无需真实锁体即可在 HA 中测试门锁卡片/自动化:
-#   位置1 → 锁定      (lock 实体 = locked)
-#   位置2 → 解锁成功  (lock 实体 = unlocked)
-#   位置3 → 解锁失败  (lock 实体 = jammed / 卡住)
-# 接线: 开关公共端 COM 接 3.3V, 三个输出端分别接 GPIO38/39/40
-#       (引脚启用内部下拉, 拨到哪一路哪一路读到高电平)
+# 用三个按钮模拟门锁, 无需真实锁体即可在 HA 中测试门锁卡片/自动化:
+#   按钮1 → 锁定      (lock 实体 = locked)
+#   按钮2 → 解锁成功  (lock 实体 = unlocked)
+#   按钮3 → 解锁失败  (lock 实体 = jammed / 卡住)
+# 按钮是瞬时触发(按下瞬间生效, 松开保持当前状态)
+# 接线: 每个按钮一端接 3.3V, 另一端分别接 GPIO38/39/40
+#       (引脚启用内部下拉, 按下时读到高电平触发)
 # LED 指示: 三个输出引脚各接一个 LED(高电平点亮), 指示当前状态:
 #   GPIO41 → 锁定 / GPIO42 → 解锁成功 / GPIO47 → 解锁失败
 #   接线: GPIO → 220Ω 限流电阻 → LED 阳极, LED 阴极 → GND
 # ⚠️ 不要用 GPIO35/36/37: 它们被 Octal PSRAM 接口占用(摄像头 PSRAM 必需),
 #    用它们会报 "GPIOxx is used by the PSRAM interface in octal mode" 警告
-# 说明: HA 前端操作(lock/unlock)不会改变物理开关, 状态始终反映开关位置
+# 自动锁定: 解锁成功/解锁失败状态保持 auto_lock_timeout 无操作后,
+#   自动回到锁定(模拟真实门锁的 auto-lock)
+# 说明: HA 前端操作(lock/unlock)同样生效(锁定/解锁成功)
 # ============================================================
 lock:
   - platform: sp3t_lock
     id: door_lock
     name: "Front Door Lock"      # 中文显示名可在 HA 中重命名
     icon: mdi:door
-    locked_pin:
+    # 三个独立按钮(按下时读到高电平, 瞬时触发)
+    locked_button:
       number: GPIO38
       mode:
         input: true
         pulldown: true
-    unlocked_pin:
+    unlocked_button:
       number: GPIO39
       mode:
         input: true
         pulldown: true
-    failed_pin:
+    failed_button:
       number: GPIO40
       mode:
         input: true
@@ -317,6 +321,8 @@ lock:
     led_locked_pin: GPIO41       # 锁定
     led_unlocked_pin: GPIO42     # 解锁成功
     led_failed_pin: GPIO47       # 解锁失败
+    # 自动锁定: 解锁成功/解锁失败保持 5s 无操作 → 自动回到锁定
+    auto_lock_timeout: 5s
     status:
       name: "Front Door Lock Status"
       id: door_lock_status

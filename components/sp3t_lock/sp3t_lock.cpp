@@ -7,10 +7,10 @@ namespace sp3t_lock {
 static const char *const TAG = "sp3t_lock";
 
 void SP3TLock::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up SP3T Lock...");
-  this->locked_pin_->setup();
-  this->unlocked_pin_->setup();
-  this->failed_pin_->setup();
+  ESP_LOGCONFIG(TAG, "Setting up button lock...");
+  this->locked_button_->setup();
+  this->unlocked_button_->setup();
+  this->failed_button_->setup();
 
   // 初始化状态指示灯输出, 上电全部熄灭
   GPIOPin *led_pins[] = {this->led_locked_pin_, this->led_unlocked_pin_, this->led_failed_pin_};
@@ -21,70 +21,80 @@ void SP3TLock::setup() {
     }
   }
 
-  this->last_pos_ = this->read_position();
-  if (this->last_pos_ == POS_UNKNOWN)
-    this->last_pos_ = POS_LOCKED;  // 上电/中间态: 安全默认锁定
-  this->apply_position(this->last_pos_);
+  // 上电默认锁定(安全默认)
+  this->apply_position(POS_LOCKED, millis());
 }
 
 void SP3TLock::loop() {
   uint32_t now = millis();
-  SwitchPos pos = this->read_position();
-  if (pos == POS_UNKNOWN)
-    return;  // 开关在切换中的中间态: 保持上次状态, 避免误报
 
-  if (pos != this->last_pos_) {
-    if (this->debounce_until_ == 0)
-      this->debounce_until_ = now + 20;  // 20ms 机械去抖
-    if (now >= this->debounce_until_) {
-      this->last_pos_ = pos;
-      this->apply_position(pos);
-      this->debounce_until_ = 0;
-    }
-  } else {
-    this->debounce_until_ = 0;
+  // 三个独立按钮: 检测按下边沿(低→高)并触发对应状态
+  this->handle_button(this->locked_button_, this->locked_last_, this->locked_debounce_, POS_LOCKED, now);
+  this->handle_button(this->unlocked_button_, this->unlocked_last_, this->unlocked_debounce_, POS_UNLOCKED, now);
+  this->handle_button(this->failed_button_, this->failed_last_, this->failed_debounce_, POS_FAILED, now);
+
+  // 自动锁定: 解锁成功/解锁失败状态停留 auto_lock_timeout_ 无操作 → 自动回到锁定
+  if (this->auto_lock_active_ && now - this->auto_lock_start_ >= this->auto_lock_timeout_) {
+    ESP_LOGI(TAG, "Auto-lock triggered after %u ms of no operation", this->auto_lock_timeout_);
+    this->auto_lock_active_ = false;
+    this->logic_pos_ = POS_LOCKED;
+    this->publish_state(lock::LOCK_STATE_LOCKED);
+    if (this->status_sensor_ != nullptr)
+      this->status_sensor_->publish_state("锁定");
+    this->update_leds(this->logic_pos_);
   }
 }
 
-SwitchPos SP3TLock::read_position() {
-  // 公共端接 3.3V + 内部下拉: 拨到哪个位置, 对应引脚读到 HIGH
-  if (this->locked_pin_->digital_read())
-    return POS_LOCKED;
-  if (this->unlocked_pin_->digital_read())
-    return POS_UNLOCKED;
-  if (this->failed_pin_->digital_read())
-    return POS_FAILED;
-  return POS_UNKNOWN;
+// 检测按钮按下(上升沿)并触发对应状态, 带 30ms 去抖防机械抖动
+void SP3TLock::handle_button(GPIOPin *pin, bool &last_state, uint32_t &debounce_until, LockPos pos, uint32_t now) {
+  if (pin == nullptr)
+    return;
+  bool pressed = pin->digital_read();
+  if (pressed && !last_state && now >= debounce_until) {
+    this->apply_position(pos, now);
+    debounce_until = now + 30;  // 30ms 去抖窗口, 防止一次按下重复触发
+  }
+  last_state = pressed;
 }
 
-void SP3TLock::apply_position(SwitchPos pos) {
+void SP3TLock::apply_position(LockPos pos, uint32_t now) {
+  this->logic_pos_ = pos;
   switch (pos) {
     case POS_LOCKED:
       this->publish_state(lock::LOCK_STATE_LOCKED);
       if (this->status_sensor_ != nullptr)
         this->status_sensor_->publish_state("锁定");
-      ESP_LOGI(TAG, "Lock state -> LOCKED (switch position 1)");
+      ESP_LOGI(TAG, "Lock state -> LOCKED (button 1)");
+      this->auto_lock_active_ = false;  // 锁定状态无需自动锁定
       break;
     case POS_UNLOCKED:
       this->publish_state(lock::LOCK_STATE_UNLOCKED);
       if (this->status_sensor_ != nullptr)
         this->status_sensor_->publish_state("解锁成功");
-      ESP_LOGI(TAG, "Lock state -> UNLOCKED (switch position 2)");
+      ESP_LOGI(TAG, "Lock state -> UNLOCKED (button 2)");
+      this->start_auto_lock(now);
       break;
     case POS_FAILED:
       this->publish_state(lock::LOCK_STATE_JAMMED);
       if (this->status_sensor_ != nullptr)
         this->status_sensor_->publish_state("解锁失败");
-      ESP_LOGI(TAG, "Lock state -> JAMMED (switch position 3, unlock failed)");
+      ESP_LOGI(TAG, "Lock state -> JAMMED (button 3, unlock failed)");
+      this->start_auto_lock(now);
       break;
     default:
       break;
   }
-  this->update_leds(pos);
+  this->update_leds(this->logic_pos_);
+}
+
+// 启动自动锁定倒计时(进入解锁成功/解锁失败状态时)
+void SP3TLock::start_auto_lock(uint32_t now) {
+  this->auto_lock_active_ = true;
+  this->auto_lock_start_ = now;
 }
 
 // 点亮当前状态对应的 LED, 熄灭其余两个
-void SP3TLock::update_leds(SwitchPos pos) {
+void SP3TLock::update_leds(LockPos pos) {
   if (this->led_locked_pin_ != nullptr)
     this->led_locked_pin_->digital_write(pos == POS_LOCKED);
   if (this->led_unlocked_pin_ != nullptr)
@@ -94,9 +104,23 @@ void SP3TLock::update_leds(SwitchPos pos) {
 }
 
 void SP3TLock::control(const lock::LockCall &call) {
-  // 物理 SP3T 开关决定状态; HA 前端操作不改变硬件, 回读开关位置
-  ESP_LOGI(TAG, "Control called from frontend, re-reading switch position");
-  this->apply_position(this->read_position());
+  // HA 前端操作: 点 lock → 锁定; 点 unlock → 解锁成功(自动锁定倒计时照常)
+  auto state = call.get_state();
+  if (!state.has_value())
+    return;
+  switch (*state) {
+    case lock::LOCK_STATE_LOCKED:
+      ESP_LOGI(TAG, "Control from frontend: LOCK");
+      this->apply_position(POS_LOCKED, millis());
+      break;
+    case lock::LOCK_STATE_UNLOCKED:
+      ESP_LOGI(TAG, "Control from frontend: UNLOCK");
+      this->apply_position(POS_UNLOCKED, millis());
+      break;
+    default:
+      ESP_LOGI(TAG, "Control: unsupported lock state %d, ignored", *state);
+      break;
+  }
 }
 
 }  // namespace sp3t_lock

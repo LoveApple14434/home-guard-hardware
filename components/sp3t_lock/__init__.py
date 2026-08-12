@@ -17,10 +17,11 @@ from esphome.const import CONF_ID
 sp3t_lock_ns = cg.esphome_ns.namespace("sp3t_lock")
 SP3TLock = sp3t_lock_ns.class_("SP3TLock", lock.Lock, cg.Component)
 
-CONF_LOCKED_PIN = "locked_pin"
-CONF_UNLOCKED_PIN = "unlocked_pin"
-CONF_FAILED_PIN = "failed_pin"
+CONF_LOCKED_BUTTON = "locked_button"
+CONF_UNLOCKED_BUTTON = "unlocked_button"
+CONF_FAILED_BUTTON = "failed_button"
 CONF_LED_LOCKED_PIN = "led_locked_pin"
 CONF_LED_UNLOCKED_PIN = "led_unlocked_pin"
 CONF_LED_FAILED_PIN = "led_failed_pin"
+CONF_AUTO_LOCK_TIMEOUT = "auto_lock_timeout"
 CONF_STATUS = "status"
