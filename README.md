@@ -68,7 +68,7 @@ esphome version
 | DHT22    | GPIO4| 数据脚（VCC→3.3V, GND→GND） |
 | 烟雾传感器| GPIO1| AO 模拟输出（MQ-2 等；若 AO 为 0~5V 需电阻分压） |
 | 按钮门锁 | GPIO38/39/40 + GPIO41/42/47 | 三个按钮模拟门锁 + 三色 LED 指示（见 2.4 节） |
-| 房间灯   | GPIO43(LED) + GPIO44(按钮)  | LED 灯 + 按钮控制，HA light 实体（见 2.5 节） |
+| 房间灯   | GPIO2(LED) + GPIO5(按钮)    | LED 灯 + 按钮控制，HA light 实体（见 2.5 节） |
 | 板载LED  | GPIO48| 状态指示灯（S3 DevKitC）    |
 
 ### 2.4 智能门锁模拟（三个独立按钮）
@@ -112,9 +112,8 @@ esphome version
 "解锁失败"用 lock 的 `jammed`（卡住）状态表示，可在 HA 中用它触发报警等自动化。
 对应实体：`lock.front_door_lock`、`text_sensor.front_door_lock_status`。
 
-> ⚠️ 原示例中的继电器（GPIO2/GPIO15）和按钮（GPIO5）引脚已被摄像头占用，
-> 因此 `switch:` 段保持注释状态。若你仍要接继电器，请先把摄像头对应引脚
-> （GPIO2/GPIO15）换到其它空闲引脚。
+> ⚠️ 摄像头已禁用（见 2.6），其释放的 GPIO2/GPIO5 现被房间灯占用（见 2.5）；
+> `switch:` 段保持注释状态。若日后重新启用摄像头，需先把房间灯换到别的空闲引脚。
 
 ### 2.5 房间灯（LED + 按钮）
 
@@ -122,13 +121,13 @@ esphome version
 
 | 引脚 | 用途 | 接线 |
 |------|------|------|
-| GPIO43 | LED（房间灯，高电平点亮） | GPIO → 220Ω 电阻 → LED 阳极；LED 阴极 → GND |
-| GPIO44 | 控制按钮 | 一端接 3.3V，另一端接 GPIO44（内部下拉，按下读高） |
+| GPIO2 | LED（房间灯，高电平点亮） | GPIO → 220Ω 电阻 → LED 阳极；LED 阴极 → GND |
+| GPIO5 | 控制按钮 | 一端接 3.3V，另一端接 GPIO5（内部下拉，按下读高） |
 
 - 按下按钮 → 切换灯的开/关；HA 中也可直接控制 `light.room_light`
-- ⚠️ GPIO43/44 是 UART0 默认引脚，本机日志用 USB-Serial-JTAG（GPIO19/20），UART0 空闲可用
+- ⚠️ 摄像头功能已禁用，GPIO2/GPIO5 是摄像头 PWDN/RESET 释放的引脚；日后若重新启用摄像头，需先把房间灯换到别的空闲引脚
 
-### 2.6 摄像头接线（OV7670）
+### 2.6 摄像头接线（OV7670）—— ⚠️ 当前已禁用
 
 > **前置要求**：OV7670 帧缓冲放在 PSRAM，**必须使用带 PSRAM 的 ESP32-S3 模块**
 > （如 `ESP32-S3-WROOM-1-N8R8` / `N16R8`，8MB Octal PSRAM），否则无法工作。
