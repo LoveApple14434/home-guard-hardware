@@ -11,7 +11,7 @@ esphome:
   compile_process_limit: 1
  
 # ============================================================
-# External Components: ZW101 指纹识别模块
+# External Components: 本地自定义组件(如 sp3t_lock 智能门锁)
 # ============================================================
 external_components:
   - source:
@@ -44,29 +44,9 @@ psram:
   speed: 80MHz
   # ignore_not_found: true   # 默认 true: 找不到 PSRAM 也能启动(此时摄像头会失败)
 
-# # ============================================================
-# # UART: ZW101 指纹识别模块通信
-# # ============================================================
-# uart:
-#   - id: zw101_uart
-#     tx_pin: GPIO20              # ZW101 TX 引脚 (UART1)
-#     rx_pin: GPIO19              # ZW101 RX 引脚 (UART1)
-#     baud_rate: 57600           # ZW101 标准波特率
-
-# # ============================================================
-# # ZW101 指纹识别模块组件
-# # ============================================================
-# zw101:
-#   id: zw101_reader
-#   uart_id: zw101_uart
-
 # 日志输出到串口/API
-# ⚠️ 诊断 ZW101 时临时用 DEBUG; 修好后改回 INFO
 logger:
-  level: DEBUG
-  # 若需单独设置某组件日志级别(如 zw101), 取消下面注释并保留 logs: 非空:
-  # logs:
-  #   zw101: DEBUG
+  level: DEBUG      # 调试完成可改 INFO 减少日志
 
 # Home Assistant 原生 API 集成(设备会自动被 HA 发现)
 api:
@@ -174,16 +154,6 @@ sensor:
   #     name: "Living Room Humidity"
   #   update_interval: 60s
 
-  # # ---- ZW101 指纹识别模块: 匹配得分和 ID ----
-  # - platform: zw101
-  #   zw101_id: zw101_reader
-  #   match_score:
-  #     name: "Fingerprint Match Score"
-  #     id: zw101_match_score
-  #   match_id:
-  #     name: "Fingerprint Match ID"
-  #     id: zw101_match_id
-
 # I2C 总线(使用 I2C 传感器时取消注释, 并按接线修改引脚)
 # i2c:
 #   sda: GPIO8
@@ -265,18 +235,6 @@ switch:
   #   name: "Outlet Switch"       # 中文显示名可在 HA 中重命名
   #   id: outlet_switch
 
-  # ---- ZW101 指纹识别模块: 注册和清除控制 ----
-  # - platform: zw101
-  #   zw101_id: zw101_reader
-  #   enroll:
-  #     name: "Enroll New Fingerprint"
-  #     id: zw101_enroll
-  #     icon: mdi:fingerprint-plus
-  #   clear:
-      # name: "Clear Fingerprint Library"
-      # id: zw101_clear
-      # icon: mdi:delete-forever
-
 # ============================================================
 # 智能门锁: 三个独立按钮模拟三种状态 + 三色 LED 指示
 # ------------------------------------------------------------
@@ -328,27 +286,42 @@ lock:
       id: door_lock_status
 
 # ============================================================
-# 二进制传感器示例: 接一个按钮/门磁(按下时触发 HA 自动化)
+# 房间灯: LED + 按钮控制, 注册为 HA light 实体
+# ------------------------------------------------------------
+# LED(房间灯): GPIO43, 高电平点亮, 需串 220Ω 限流电阻
+# 按钮: GPIO44, 一端接 3.3V, 按下读到高电平 → 切换灯的开关
+# ⚠️ GPIO43/44 是 UART0 默认引脚(TX/RX), 本机日志用 USB-Serial-JTAG
+#    (GPIO19/20), UART0 空闲, 可安全用作 GPIO
+# HA 实体: light.room_light (可重命名为"房间灯")
+# ============================================================
+output:
+  - platform: gpio
+    pin: GPIO43
+    id: room_led_output
+
+light:
+  - platform: binary
+    name: "Room Light"          # 中文显示名可在 HA 中重命名
+    id: room_light
+    output: room_led_output
+
+# ============================================================
+# 二进制传感器: 房间灯按钮(按下切换灯的开关)
 # ============================================================
 binary_sensor:
-  # - platform: gpio
-  #   pin:
-  #     number: GPIO5
-  #     mode:
-  #       input: true
-  #       pullup: true
-  #   name: "Front Door Button"    # 中文显示名可在 HA 中重命名
-  #   id: door_button
-  #   filters:
-  #     - delayed_on: 50ms       # 防抖
-  #     - delayed_off: 50ms
-
-  # # ---- ZW101 指纹识别模块: 匹配状态 ----
-  # - platform: zw101
-  #   zw101_id: zw101_reader
-  #   name: "Fingerprint Matched"
-  #   id: zw101_fingerprint_match
-  #   device_class: lock
+  - platform: gpio
+    pin:
+      number: GPIO44
+      mode:
+        input: true
+        pulldown: true
+    name: "Room Light Button"
+    id: room_light_button
+    filters:
+      - delayed_on: 30ms        # 防抖
+      - delayed_off: 30ms
+    on_press:
+      - light.toggle: room_light
 
 # ============================================================
 # 文本传感器: 显示设备运行信息(可选)
@@ -367,13 +340,6 @@ text_sensor:
   - platform: version
     name: "Firmware Version"
     id: fw_version
-
-  # # ---- ZW101 指纹识别模块: 状态信息 ----
-  # - platform: zw101
-  #   zw101_id: zw101_reader
-  #   status:
-  #     name: "Fingerprint Reader Status"
-  #     id: zw101_status
 
 # ============================================================
 # 状态指示灯(可选): 用板载 LED 指示设备状态
