@@ -134,6 +134,24 @@ sensor:
       // 0~3.3V 线性映射到 0~100%; 若接了分压请自行换算回实际电压
       return id(smoke_voltage).state / 3.3 * 100.0;
 
+  # ---- TOF050C 激光测距模块 (ST VL6180X, I2C 地址 0x29, 0~50cm) ----
+  # 接线: VIN→3.3V, GND→GND, SDA→GPIO8, SCL→GPIO9, SHUT→3.3V(拉高使能, 必须!)
+  # ⚠️ GPIO8/9 是摄像头 D0/D1 释放的引脚; 日后重新启用摄像头需迁移
+  # 自定义组件: components/tof050c/ (sensor 平台)
+  - platform: tof050c
+    i2c_id: tof_i2c
+    name: "ToF Distance"
+    id: tof_distance
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+    update_interval: 200ms
+    range_scaler: 1            # 1x(默认,~20cm 最准)/2x(~40cm)/3x(~60cm, 精度下降)
+    # enable_pin: GPIO13       # 可选: 用 GPIO 控制 SHUT 使能脚(不配则硬件把 SHUT 接 3.3V)
+    filters:
+      - sliding_window_moving_average:   # 滑动平均滤波, 平滑测距抖动
+          window_size: 5
+          send_every: 5
+
   # ---- 备选: I2C AHT20 (若你用的是 I2C 温湿度传感器) ----
   # 注意: 同样用英文名, 中文显示在 HA 中重命名即可
   # - platform: aht10
@@ -181,6 +199,13 @@ i2c:
   - id: nfc_i2c
     sda: GPIO6
     scl: GPIO7
+    scan: true
+
+  # ---- TOF050C 激光测距模块独立 I2C 总线 ----
+  # 接线: SDA→GPIO8, SCL→GPIO9 (摄像头 D0/D1 释放脚, 与 NFC 总线隔离)
+  - id: tof_i2c
+    sda: GPIO8
+    scl: GPIO9
     scan: true
 
 pn532_i2c:
