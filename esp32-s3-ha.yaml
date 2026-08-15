@@ -100,6 +100,27 @@ sensor:
       id: living_humidity
       accuracy_decimals: 1
     update_interval: 5s
+  - platform: rotary_encoder
+    id: knob
+    name: "Rotary Knob"
+    pin_a:
+      number: GPIO13
+      mode:
+        input: true
+        pullup: true
+    pin_b:
+      number: GPIO15
+      mode:
+        input: true
+        pullup: true
+    resolution: 1          # 1=每格+1 最稳; 2=半格; 4=四倍细分(易抖)
+    min_value: 0
+    max_value: 100
+    restore_mode: RESTORE_DEFAULT_ZERO   # 断电记住上次位置(存 NVS)
+    on_clockwise:
+      - logger.log: "CW"
+    on_anticlockwise:
+      - logger.log: "CCW"
 
   # ---- 烟雾传感器: ADC 模拟电压输入 (如 MQ-2 / MQ-7 / MQ-135) ----
   # 接线: 模块 VCC→5V(或3.3V), GND→GND, AO(模拟输出)→GPIO1
@@ -438,12 +459,19 @@ output:
   - platform: gpio
     pin: GPIO2
     id: room_led_output
+  - platform: gpio
+    pin: GPIO3
+    id: camera_simu
 
 light:
   - platform: binary
     name: "Room Light"          # 中文显示名可在 HA 中重命名
     id: room_light
     output: room_led_output
+  - platform: binary
+    name: "Camera On Light"          # 中文显示名可在 HA 中重命名
+    id: camera_light
+    output: camera_simu
 
 # ============================================================
 # 二进制传感器: 房间灯按钮(按下切换灯的开关)
@@ -462,6 +490,19 @@ binary_sensor:
       - delayed_off: 30ms
     on_press:
       - light.toggle: room_light
+  - platform: gpio
+    pin:
+      number: GPIO10
+      mode:
+        input: true
+        pulldown: true
+    name: "Camera Button"
+    id: camera_button
+    filters:
+      - delayed_on: 30ms        # 防抖
+      - delayed_off: 30ms
+    on_press:
+      - light.toggle: camera_light
 
 # ============================================================
 # 文本传感器: 显示设备运行信息(可选)
