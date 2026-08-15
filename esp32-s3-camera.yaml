@@ -1,0 +1,139 @@
+# ============================================================
+# ESP32-S3 摄像头专用板 —— 独立 ESPHome 配置文件
+# 参考文档: https://esphome.io
+# ------------------------------------------------------------
+# 用途: 单独一块 ESP32-S3 板只接 OV7670 摄像头, 与主控板
+#       (esp32-s3-ha.yaml, 已因引脚不足禁用摄像头) 分离。
+# 烧录: esphome run esp32-s3-camera.yaml
+# 接线: 见 README「摄像头接线(OV7670)」表, 引脚与主控板方案一致。
+# ============================================================
+
+esphome:
+  name: esp32-s3-camera           # 设备名(小写/下划线, 与主控板不同, 避免 HA 实体冲突)
+  friendly_name: "ESP32 S3 Camera"
+  compile_process_limit: 1
+
+esp32:
+  board: esp32-s3-devkitc-1       # YD-ESP32-23 (S3-N16R8)
+  variant: esp32s3
+  framework:
+    type: arduino                 # 或 type: esp-idf
+  # 同主控板: 强制 platformio 工具链(本机 ESP-IDF 安装不完整, 见 README 2.1)
+  toolchain: platformio
+  # 本板模块为 ESP32-S3-WROOM-1-N16R8: 16MB Flash + 8MB Octal PSRAM
+  flash_size: 16MB
+
+# ============================================================
+# PSRAM 外部内存 —— 摄像头必需!
+# 新板子必须带 PSRAM(如 ESP32-S3-WROOM-1-N8R8 / N16R8, 8MB Octal PSRAM)。
+# OV7670 帧缓冲默认放 PSRAM, 没有 PSRAM 摄像头无法工作。
+#   - Octal PSRAM(常见) → mode: octal
+#   - Quad PSRAM(少见)  → mode: quad
+# ============================================================
+psram:
+  mode: octal
+  speed: 80MHz
+
+# 日志: 摄像头接线调试时用 DEBUG 可看到 i2c 扫描结果
+#       ("Found device at address 0x21" = 摄像头已应答);
+#       调通后改回 INFO 减少日志。
+logger:
+  level: DEBUG
+
+# Home Assistant 原生 API(设备自动被 HA 发现, 复用 secrets.yaml 的密钥)
+api:
+  encryption:
+    key: !secret api_key
+
+# 无线 OTA 升级
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# WiFi 备用热点(首次配置或断网时)
+captive_portal:
+
+# ---------------- 网络 ----------------
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "ESP32-S3-Camera-Fallback"
+    password: !secret ap_password
+
+# ============================================================
+# OV7670 的 SCCB 控制总线(模块上的 SIOD/SIOC)
+#   接线: SIOD→GPIO21, SIOC→GPIO14 (别接反; 线长建议加 4.7kΩ 上拉)
+# ============================================================
+i2c:
+  - id: camera_i2c
+    sda: GPIO21
+    scl: GPIO14
+    scan: true
+
+# ============================================================
+# 摄像头: OV7670 (DVP 并口摄像头)
+# ------------------------------------------------------------
+# 特性说明:
+#   * OV7670 没有硬件 JPEG 编码器 → 需输出 RGB565 再由 ESP32 软件转 JPEG
+#     (对应 pixel_format: RGB565 + jpeg_quality: 10), 帧率会偏低。
+#   * 最高原生分辨率 VGA(640x480); 默认 QVGA(320x240) 更流畅。
+#   * 若日志报 "Detected camera not supported" → 先查硬件:
+#     供电(部分模块要 5V)/PWDN(必须低)/RESET(必须高)/XCLK/SIOD-SIOC。
+# 完整接线见 README「摄像头接线(OV7670)」。
+# ============================================================
+esp32_camera:
+  name: "Room Camera"           # 中文显示名在 HA 中重命名即可
+  id: room_camera
+
+  # DVP 8 位并行数据线, 顺序 D0~D7(对应传感器 Y2~Y9)
+  data_pins: [GPIO11, GPIO12, GPIO9, GPIO8, GPIO10, GPIO16, GPIO17, GPIO18]
+  vsync_pin: GPIO6
+  href_pin: GPIO7
+  pixel_clock_pin: GPIO13
+  external_clock:
+    pin: GPIO15
+    frequency: 20MHz
+
+  i2c_id: camera_i2c            # 使用上面定义的摄像头 i2c 总线
+  reset_pin: GPIO5              # 若模块没引出 RESET, 删掉这两行
+  power_down_pin: GPIO2         # 若模块没引出 PWDN, 删掉这两行
+
+  # OV7670 没有硬件 JPEG → RGB565 + 软件转换(必须同时设 jpeg_quality)
+  pixel_format: RGB565
+  jpeg_quality: 10
+  resolution: QVGA              # 320x240; 想要更清晰可改 VGA(640x480) 但更卡
+  frame_buffer_location: PSRAM
+
+  # 帧率: max 为有人观看时的帧率, idle 为无人观看时的帧率
+  max_framerate: 10 fps
+  idle_framerate: 0.1 fps
+
+  # 画面方向(按需调整)
+  # horizontal_mirror: true
+  # vertical_flip: false
+
+# 摄像头 HTTP 视频流(浏览器直接看, 无需 HA)
+#   http://<设备IP>:8080/           MJPEG 视频流
+#   http://<设备IP>:8080/snapshot   单张快照
+esp32_camera_web_server:
+  - port: 8080
+    mode: stream
+
+# ============================================================
+# 文本传感器: 便于查看设备 IP / 联网状态
+# ============================================================
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+    ssid:
+      name: "Connected WiFi"
+
+# ============================================================
+# 状态指示灯: 板载 LED 指示设备状态(可选)
+# ============================================================
+status_led:
+  pin:
+    number: GPIO48              # ESP32-S3-DevKitC-1 板载 RGB LED
+    inverted: true
