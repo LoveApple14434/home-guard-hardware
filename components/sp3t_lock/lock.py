@@ -69,7 +69,7 @@ async def to_code(config):
             pin = await cg.gpio_pin_expression(config[key])
             cg.add(setter(pin))
 
-    cg.add(var.set_auto_lock_timeout(config[CONF_AUTO_LOCK_TIMEOUT].total_milliseconds))
+    # cg.add(var.set_auto_lock_timeout(config[CONF_AUTO_LOCK_TIMEOUT].total_milliseconds))
 
     if CONF_STATUS in config:
         ts = await text_sensor.new_text_sensor(config[CONF_STATUS])

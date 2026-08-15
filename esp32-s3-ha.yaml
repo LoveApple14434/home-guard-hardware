@@ -112,7 +112,7 @@ sensor:
     pin: GPIO1                  # AO 模拟输出脚(请按实际接线修改)
     name: "Smoke Sensor Voltage"
     id: smoke_voltage
-    update_interval: 5s
+    update_interval: 2s
     attenuation: 12db          # 12dB 衰减(约11dB), 支持满量程 0~3.3V 测量
     filters:
       - sliding_window_moving_average:   # 滑动平均滤波, 平滑抖动
@@ -129,7 +129,7 @@ sensor:
     id: smoke_level
     unit_of_measurement: "%"
     accuracy_decimals: 0
-    update_interval: 5s
+    update_interval: 2s
     lambda: |-
       // 0~3.3V 线性映射到 0~100%; 若接了分压请自行换算回实际电压
       return id(smoke_voltage).state / 3.3 * 100.0;
