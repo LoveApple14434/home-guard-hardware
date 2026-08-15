@@ -192,6 +192,8 @@ sensor:
 #   ① homeassistant.tag_scanned 发给 HA Tags(在 HA「设置→标签」里
 #      增删卡/做自动化, 免重新编译固件)
 #   ② 推送到模板文本传感器 rfid_tag 便于调试
+#   ③ NFC 门锁: 比对白名单 nfc_whitelist →
+#      授权卡 → lock.unlock(门锁解锁, 自动上锁); 未授权卡 → 保持锁定并提示
 # 说明: 使用独立 I2C 总线(nfc_i2c), 与其它外设隔离避免干扰;
 #       默认器件地址 0x24, 无需额外配置
 # ============================================================
@@ -208,6 +210,61 @@ i2c:
     scl: GPIO9
     scan: true
 
+# ============================================================
+# NFC 门锁: 授权卡白名单(断电不丢) + HA 录入/清空按钮
+# ------------------------------------------------------------
+# globals.nfc_whitelist : 逗号分隔的授权卡 UID, restore_value 存 flash,
+#                         重启后保留(上电默认空 → 全部卡拒绝, 安全默认)
+# globals.last_nfc_uid  : 最近一次刷卡 UID, 供"录入"按钮取用
+# button ① NFC Enroll Last Card: 把最近刷的卡加入白名单(自动去重)
+# button ② NFC Clear Whitelist : 清空所有授权卡
+# 录入流程: 先刷卡(HA 里 NFC Tag ID 可见 UID) → 再点"Enroll"按钮
+# ⭐ 烧录时预置初始授权卡: 改下面 nfc_whitelist 的 initial_value 即可,
+#    例(3 张卡): initial_value: '"74-10-37-94,AB-CD-EF-12,12-34-56-78"'
+#    格式与 NFC Tag ID 显示一致(大写十六进制、短横线分隔), 逗号分隔多张。
+#    ⚠️ 生效规则: 仅当设备 flash/NVS 里"还没保存过名单"时生效
+#      (即首次烧录, 或从未用 HA 录入/清空过)。一旦保存过, 以保存的名单为准,
+#      重新烧录 initial_value 不会覆盖它; 想重置可点 HA 的 Clear 按钮或擦除 flash。
+# ============================================================
+globals:
+  - id: nfc_whitelist
+    type: std::string
+    restore_value: true
+    max_restore_data_length: 200   # 上限254; 每张卡11字符(如 74-10-37-94), 可存 ~18 张
+    initial_value: '"E7-26-29-03"'            # ← 烧录时预置的初始授权卡(见上方注释), 不需要则保持空字符串
+  - id: last_nfc_uid
+    type: std::string
+    initial_value: '""'
+
+button:
+  - platform: template
+    name: "NFC Enroll Last Card"   # 先刷卡, 再点此按钮 → 加入授权名单
+    id: nfc_enroll_btn
+    icon: mdi:card-plus
+    on_press:
+      - lambda: |-
+          std::string uid = id(last_nfc_uid);
+          if (uid.empty()) {
+            ESP_LOGW("nfc_lock", "Enroll ignored: no card scanned yet");
+          } else if (("," + id(nfc_whitelist) + ",").find("," + uid + ",") == std::string::npos) {
+            if (id(nfc_whitelist).empty())
+              id(nfc_whitelist) = uid;
+            else
+              id(nfc_whitelist) += "," + uid;
+            ESP_LOGI("nfc_lock", "Enrolled card: %s", uid.c_str());
+          }
+  - platform: template
+    name: "NFC Clear Whitelist"
+    id: nfc_clear_btn
+    icon: mdi:card-remove
+    on_press:
+      - globals.set:
+          id: nfc_whitelist
+          value: '""'
+      - text_sensor.template.publish:
+          id: nfc_whitelist_display
+          state: ""
+
 pn532_i2c:
   id: pn532_board
   i2c_id: nfc_i2c
@@ -218,6 +275,23 @@ pn532_i2c:
       - text_sensor.template.publish:
           id: rfid_tag
           state: !lambda 'return x;'
+      # 记录最近刷卡 UID(供"录入"按钮使用)
+      - globals.set:
+          id: last_nfc_uid
+          value: !lambda 'return x;'
+      # NFC 门锁: 授权卡 → 解锁; 未授权卡 → 保持锁定并提示
+      - if:
+          condition:
+            lambda: 'return ("," + id(nfc_whitelist) + ",").find("," + x + ",") != std::string::npos;'
+          then:
+            - lock.unlock: door_lock
+            - text_sensor.template.publish:
+                id: nfc_auth_result
+                state: "解锁成功"
+          else:
+            - text_sensor.template.publish:
+                id: nfc_auth_result
+                state: !lambda 'return std::string("未授权: ") + x;'
   on_tag_removed:
     then:
       - text_sensor.template.publish:
@@ -412,6 +486,19 @@ text_sensor:
     name: "NFC Tag ID"
     id: rfid_tag
     icon: mdi:nfc-variant
+
+  # ---- NFC 门锁: 授权卡白名单(只读显示) + 刷卡结果 ----
+  - platform: template
+    name: "NFC Whitelist"
+    id: nfc_whitelist_display
+    icon: mdi:card-multiple
+    update_interval: 1s
+    lambda: |-
+      return id(nfc_whitelist);
+  - platform: template
+    name: "NFC Auth Result"
+    id: nfc_auth_result
+    icon: mdi:nfc
 
 # ============================================================
 # 状态指示灯(可选): 用板载 LED 指示设备状态

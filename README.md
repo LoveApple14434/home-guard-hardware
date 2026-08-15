@@ -2,8 +2,8 @@
 
 基于开源项目 [ESPHome](https://esphome.io) 将 ESP32-S3 接入 Home Assistant，实现：
 - 🌡️ 温湿度等传感器数据上报
-- � OV7670 摄像头实时画面 / 快照（浏览器 + HA 均可查看）
-- �💡 开关 / 继电器 / 灯控制
+- 📷 OV7670 摄像头实时画面 / 快照（浏览器 + HA 均可查看，独立摄像头板）
+- 💡 开关 / 继电器 / 灯控制
 - 📊 HA 仪表盘展示
 - ⚡ 与 HA 自动化联动
 
@@ -13,11 +13,17 @@
 
 ```
 esp_mqtt_ha/
-├── esp32-s3-ha.yaml   # ESPHome 主配置(传感器/开关/网络等)
-├── secrets.yaml       # 敏感信息(WiFi密码/API密钥), 勿提交到 git
-├── .venv/             # Python 虚拟环境(已装好 esphome)
-└── README.md          # 本文件
+├── esp32-s3-ha.yaml       # 主控板配置(传感器/门锁/NFC/TOF/房间灯等, 摄像头已禁用)
+├── esp32-s3-camera.yaml   # 摄像头专用板配置(独立板子, 仅 OV7670)
+├── components/            # 本地自定义组件(如 sp3t_lock 门锁)
+├── secrets.yaml           # 敏感信息(WiFi密码/API密钥), 勿提交到 git
+├── .venv/                 # Python 虚拟环境(已装好 esphome)
+└── README.md              # 本文件
 ```
+
+> 🧱 **双板架构**：主控板（`esp32-s3-ha.yaml`）因引脚不足已禁用摄像头，
+> 摄像头单独接到另一块 ESP32-S3 板上（`esp32-s3-camera.yaml`）。两块板
+> 各自接入同一个 HA，实体互相独立；都复用同一份 `secrets.yaml`。
 
 ## 2. 准备工作
 
@@ -128,7 +134,11 @@ esphome version
 - 按下按钮 → 切换灯的开/关；HA 中也可直接控制 `light.room_light`
 - ⚠️ 摄像头功能已禁用，GPIO2/GPIO5 是摄像头 PWDN/RESET 释放的引脚；日后若重新启用摄像头，需先把房间灯换到别的空闲引脚
 
-### 2.6 摄像头接线（OV7670）—— ⚠️ 当前已禁用
+### 2.6 摄像头接线（OV7670）—— 独立摄像头板
+
+> 🧱 摄像头已从主控板拆出，放在**独立板子**上，使用专用配置
+> **`esp32-s3-camera.yaml`**（主控板 `esp32-s3-ha.yaml` 已因引脚不足禁用摄像头）。
+> 烧录命令：`esphome run esp32-s3-camera.yaml`
 
 > **前置要求**：OV7670 帧缓冲放在 PSRAM，**必须使用带 PSRAM 的 ESP32-S3 模块**
 > （如 `ESP32-S3-WROOM-1-N8R8` / `N16R8`，8MB Octal PSRAM），否则无法工作。
@@ -183,6 +193,50 @@ esphome version
 - 输出：`sensor.tof_distance`（单位 mm，已加 5 点滑动平均滤波）
 - ⚠️ 引脚借用摄像头 D0/D1 释放的 GPIO8/9，**日后重新启用摄像头需迁移**（同 NFC 借用 GPIO6/7 的处理方式）
 - 💡 若需要 >20cm 的稳定精度，建议换 **VL53L0X 模块**（ESPHome 原生支持 `vl53l0x`，接线兼容随时可换）
+
+### 2.8 NFC 门锁（PN532 卡号白名单解锁）
+
+把已接入的 **PN532 NFC 模块** 与 **sp3t_lock 门锁** 联动：刷到**授权卡 → 门锁解锁**（自动上锁照常），
+刷到**其它卡 → 保持锁定**并在 HA 显示"未授权"。授权卡名单存在 **flash（NVS）**，断电重启不丢。
+
+**HA 实体**：
+
+| 实体 | 类型 | 说明 |
+|------|------|------|
+| `button.nfc_enroll_last_card` | 按钮 | 把"最近刷卡"加入授权名单（自动去重） |
+| `button.nfc_clear_whitelist` | 按钮 | 清空所有授权卡（需重新录入） |
+| `text_sensor.nfc_tag_id` | 文本 | 最近一次刷卡 UID（如 `74-10-37-94`） |
+| `text_sensor.nfc_whitelist` | 文本 | 当前授权名单（逗号分隔，只读） |
+| `text_sensor.nfc_auth_result` | 文本 | 刷卡结果：`解锁成功` / `未授权: <UID>` |
+
+**录入流程**：
+
+1. 把要授权的卡放到 PN532 上刷一下（HA 的 `NFC Tag ID` 会显示 UID）
+2. 在 HA 点一次 **NFC Enroll Last Card** 按钮 → 该卡加入授权名单
+3. 重复以上两步录入多张卡；点 **NFC Clear Whitelist** 清空全部
+
+> ⚠️ 注意：必须**先刷卡、再点录入**；若先点按钮后刷卡，录入的是上一次的卡。
+> ⚠️ 安全提示：这是 **UID 白名单**方案（非加密门禁），NFC 的 UID 可被克隆/模拟，
+> 适合家庭演示与测试，**勿用于真正重要的门禁**。
+
+**实现说明**：`globals.nfc_whitelist`（`std::string` + `restore_value: true`）持久化名单，
+`on_tag` 里用逗号分隔精确匹配判断授权（避免子串误判），授权卡调 `lock.unlock: door_lock`。
+
+**可选：烧录时预置初始授权卡**：改 `esp32-s3-ha.yaml` 里 `globals.nfc_whitelist` 的
+`initial_value` 即可在首次烧录后直接放行指定卡，无需先刷卡录入，例如：
+
+```yaml
+globals:
+  - id: nfc_whitelist
+    type: std::string
+    restore_value: true
+    max_restore_data_length: 200
+    initial_value: '"74-10-37-94,AB-CD-EF-12"'   # 逗号分隔多张卡, 格式同 NFC Tag ID
+```
+
+> ⚠️ 仅当设备 flash/NVS **还没保存过名单**时生效（首次烧录，或从未用 HA 录入/清空过）。
+> 一旦保存过，以保存的名单为准，重新烧录 `initial_value` 不会覆盖它；
+> 想重置可点 HA 的 **NFC Clear Whitelist** 按钮，或 `esptool.py erase_flash` 擦除后重烧。
 
 ## 3. 编译并烧录
 
