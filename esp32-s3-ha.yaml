@@ -286,6 +286,39 @@ button:
           id: nfc_whitelist_display
           state: ""
 
+# ============================================================
+# 可被 HA 自由修改的时间对象 custom_time
+# ------------------------------------------------------------
+# 用内置 datetime 组件的 template TIME 平台实现, 纯 YAML 无需自定义组件:
+#   * HA 中显示为 time 域实体 "Custom Time"(前端时间选择器, 可随意修改)
+#   * HA API / 服务 time.set_value / ESPHome 原生 API 均可设置
+#   * optimistic: true  → HA 修改后立即生效(无需 set_action)
+#   * restore_value: true → 断电记住上次设置(存 flash/NVS)
+#   * initial_value 首次上电默认值(格式 HH:MM 或 HH:MM:SS)
+# 读取/显示: 下方 display 的 lambda 用
+#   id(custom_time).state_as_esptime() 拿到 ESPTime(hour/minute/second)
+#   再交给 it.strftime() 格式化(如 "%H.%M" 显示 HH.MM)。
+#   显示每秒刷新, HA 修改后 1s 内自动更新。
+# ============================================================
+datetime:
+  - platform: template
+    id: custom_time
+    name: "Custom Time"
+    type: TIME
+    optimistic: true
+    restore_value: true
+    initial_value: "00:00"
+
+display:
+  platform: tm1637
+  id: tm1637_display
+  clk_pin: GPIO11
+  dio_pin: GPIO12
+  inverted: true
+  length: 4
+  lambda: |-
+    it.strftime("%H.%M", id(custom_time).state_as_esptime());
+
 pn532_i2c:
   id: pn532_board
   i2c_id: nfc_i2c
