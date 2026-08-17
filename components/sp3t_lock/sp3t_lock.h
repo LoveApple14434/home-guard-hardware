@@ -27,8 +27,6 @@ class SP3TLock : public lock::Lock, public Component {
   void set_led_unlocked_pin(GPIOPin *pin) { this->led_unlocked_pin_ = pin; }
   void set_led_failed_pin(GPIOPin *pin) { this->led_failed_pin_ = pin; }
   void set_status_sensor(text_sensor::TextSensor *sensor) { this->status_sensor_ = sensor; }
-  // 自动锁定延时(毫秒): 解锁成功/解锁失败状态保持该时长无操作后自动回到锁定
-  void set_auto_lock_timeout(uint32_t timeout_ms) { this->auto_lock_timeout_ = timeout_ms; }
 
   void setup() override;
   void loop() override;
@@ -38,9 +36,8 @@ class SP3TLock : public lock::Lock, public Component {
   void control(const lock::LockCall &call) override;
 
   void handle_button(GPIOPin *pin, bool &last_state, uint32_t &debounce_until, LockPos pos, uint32_t now);
-  void apply_position(LockPos pos, uint32_t now);
+  void apply_position(LockPos pos);
   void update_leds(LockPos pos);
-  void start_auto_lock(uint32_t now);
 
   // 三个独立按钮输入(按下时读到高电平)
   GPIOPin *locked_button_{nullptr};
@@ -60,11 +57,6 @@ class SP3TLock : public lock::Lock, public Component {
   text_sensor::TextSensor *status_sensor_{nullptr};
 
   LockPos logic_pos_{POS_LOCKED};  // 当前逻辑门锁状态(上电默认锁定)
-
-  // 自动锁定状态
-  bool auto_lock_active_{false};       // 是否正在自动锁定倒计时
-  uint32_t auto_lock_start_{0};        // 倒计时起始时刻(ms)
-  uint32_t auto_lock_timeout_{5000};   // 自动锁定延时, 默认 5s
 };
 
 }  // namespace sp3t_lock

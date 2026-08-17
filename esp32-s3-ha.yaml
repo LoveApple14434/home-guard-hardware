@@ -122,6 +122,31 @@ sensor:
     on_anticlockwise:
       - logger.log: "CCW"
 
+  # ---- 第二个旋转编码器(与上面配置相同) ----
+  # 复用摄像头禁用后释放的空闲引脚: GPIO16 / GPIO17(原摄像头 D5/D6)
+  # 接线同第一个: A→GPIO16, B→GPIO17, 内部上拉, 公共端接 GND
+  - platform: rotary_encoder
+    id: knob2
+    name: "Rotary Knob 2"
+    pin_a:
+      number: GPIO16
+      mode:
+        input: true
+        pullup: true
+    pin_b:
+      number: GPIO17
+      mode:
+        input: true
+        pullup: true
+    resolution: 1          # 1=每格+1 最稳; 2=半格; 4=四倍细分(易抖)
+    min_value: 0
+    max_value: 100
+    restore_mode: RESTORE_DEFAULT_ZERO   # 断电记住上次位置(存 NVS)
+    on_clockwise:
+      - logger.log: "CW"
+    on_anticlockwise:
+      - logger.log: "CCW"
+
   # ---- 烟雾传感器: ADC 模拟电压输入 (如 MQ-2 / MQ-7 / MQ-135) ----
   # 接线: 模块 VCC→5V(或3.3V), GND→GND, AO(模拟输出)→GPIO1
   # ⚠️ 很多 MQ 模块需要 5V 供电且 AO 输出 0~5V, 直接接到 3.3V ADC 会损坏引脚!
@@ -444,8 +469,7 @@ switch:
 #   接线: GPIO → 220Ω 限流电阻 → LED 阳极, LED 阴极 → GND
 # ⚠️ 不要用 GPIO35/36/37: 它们被 Octal PSRAM 接口占用(摄像头 PSRAM 必需),
 #    用它们会报 "GPIOxx is used by the PSRAM interface in octal mode" 警告
-# 自动锁定: 解锁成功/解锁失败状态保持 auto_lock_timeout 无操作后,
-#   自动回到锁定(模拟真实门锁的 auto-lock)
+# 无自动锁定: 解锁成功/解锁失败状态将一直保持, 直到手动按下按钮或 HA 前端操作
 # 说明: HA 前端操作(lock/unlock)同样生效(锁定/解锁成功)
 # ============================================================
 lock:
@@ -473,8 +497,7 @@ lock:
     led_locked_pin: GPIO41       # 锁定
     led_unlocked_pin: GPIO42     # 解锁成功
     led_failed_pin: GPIO47       # 解锁失败
-    # 自动锁定: 解锁成功/解锁失败保持 5s 无操作 → 自动回到锁定
-    auto_lock_timeout: 5s
+    # 无自动锁定: 解锁/解锁失败后保持该状态, 直到手动操作
     status:
       name: "Front Door Lock Status"
       id: door_lock_status

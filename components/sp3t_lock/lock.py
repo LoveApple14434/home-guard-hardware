@@ -18,7 +18,6 @@ from esphome.components import lock, text_sensor
 from esphome.const import CONF_ID
 
 from . import (
-    CONF_AUTO_LOCK_TIMEOUT,
     CONF_FAILED_BUTTON,
     CONF_LED_FAILED_PIN,
     CONF_LED_LOCKED_PIN,
@@ -43,8 +42,6 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_LED_LOCKED_PIN): pins.gpio_output_pin_schema,
             cv.Optional(CONF_LED_UNLOCKED_PIN): pins.gpio_output_pin_schema,
             cv.Optional(CONF_LED_FAILED_PIN): pins.gpio_output_pin_schema,
-            # 自动锁定延时: 解锁成功/解锁失败状态保持该时长无操作后自动回到锁定
-            cv.Optional(CONF_AUTO_LOCK_TIMEOUT, default="5s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_STATUS): text_sensor.text_sensor_schema(),
         }
     )
@@ -68,8 +65,6 @@ async def to_code(config):
         if key in config:
             pin = await cg.gpio_pin_expression(config[key])
             cg.add(setter(pin))
-
-    # cg.add(var.set_auto_lock_timeout(config[CONF_AUTO_LOCK_TIMEOUT].total_milliseconds))
 
     if CONF_STATUS in config:
         ts = await text_sensor.new_text_sensor(config[CONF_STATUS])
